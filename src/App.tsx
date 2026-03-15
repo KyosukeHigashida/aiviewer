@@ -2,7 +2,7 @@ import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { PdfViewer } from './components/PdfViewer';
 import { ThreadPanel } from './components/ThreadPanel';
 import type { AnnotationThread, SelectionDraft } from './types/annotation';
-import { loadThreads, saveThreads } from './lib/storage';
+import { loadPersistedState, saveCurrentDocument, saveThread } from './lib/storage';
 
 function createThreadId() {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -32,6 +32,8 @@ type CurrentDocument = {
 };
 
 export default function App() {
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [persistenceMessage, setPersistenceMessage] = useState<string | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(null);
   const [threads, setThreads] = useState<AnnotationThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -41,12 +43,44 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setThreads(loadThreads());
-  }, []);
+    let ignore = false;
 
-  useEffect(() => {
-    saveThreads(threads);
-  }, [threads]);
+    const initialize = async () => {
+      setIsInitializing(true);
+
+      try {
+        const persistedState = await loadPersistedState();
+
+        if (ignore) {
+          return;
+        }
+
+        setThreads(persistedState.threads);
+
+        if (persistedState.currentDocument) {
+          setCurrentDocument({
+            fingerprint: persistedState.currentDocument.fingerprint,
+            name: persistedState.currentDocument.name,
+            url: URL.createObjectURL(persistedState.currentDocument.blob),
+          });
+        }
+      } catch {
+        if (!ignore) {
+          setPersistenceMessage('保存済みデータの復元に失敗しました。');
+        }
+      } finally {
+        if (!ignore) {
+          setIsInitializing(false);
+        }
+      }
+    };
+
+    void initialize();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -83,11 +117,20 @@ export default function App() {
       pageNumber: selectionDraft.pageNumber,
       contextBefore: selectionDraft.contextBefore,
       contextAfter: selectionDraft.contextAfter,
+      selectionStart: selectionDraft.selectionStart,
+      selectionEnd: selectionDraft.selectionEnd,
+      anchorStartSpanIndex: selectionDraft.anchorStartSpanIndex,
+      anchorEndSpanIndex: selectionDraft.anchorEndSpanIndex,
+      highlightRects: selectionDraft.highlightRects,
     };
 
     setThreads((current) => [nextThread, ...current]);
     setSelectionDraft(null);
     setActiveThreadId(nextThread.id);
+    setPersistenceMessage(null);
+    void saveThread(nextThread).catch(() => {
+      setPersistenceMessage('スレッドの保存に失敗しました。');
+    });
   };
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -98,10 +141,13 @@ export default function App() {
     }
 
     setIsPickingFile(true);
+    setPersistenceMessage(null);
+    let fingerprint = '';
 
     try {
-      const fingerprint = await createDocumentFingerprint(file);
+      fingerprint = await createDocumentFingerprint(file);
       const nextUrl = URL.createObjectURL(file);
+      await saveCurrentDocument(file, fingerprint);
 
       setCurrentDocument((current) => {
         if (current?.url) {
@@ -117,6 +163,26 @@ export default function App() {
       setSelectionDraft(null);
       setActiveThreadId(null);
       setIsMobileSheetExpanded(false);
+    } catch {
+      setPersistenceMessage('PDF の保存に失敗しました。今回の表示だけ継続します。');
+
+      if (!fingerprint) {
+        return;
+      }
+
+      const fallbackUrl = URL.createObjectURL(file);
+
+      setCurrentDocument((current) => {
+        if (current?.url) {
+          URL.revokeObjectURL(current.url);
+        }
+
+        return {
+          fingerprint,
+          name: file.name,
+          url: fallbackUrl,
+        };
+      });
     } finally {
       setIsPickingFile(false);
       event.target.value = '';
@@ -149,7 +215,13 @@ export default function App() {
             {isPickingFile ? 'PDF を準備中...' : 'PDF を選択'}
           </button>
           <p className="document-status">
-            {currentDocument ? currentDocument.name : 'まだ PDF は選択されていません。'}
+            {isInitializing
+              ? '保存済みの PDF を復元しています。'
+              : persistenceMessage
+                ? persistenceMessage
+                : currentDocument
+                  ? currentDocument.name
+                  : 'まだ PDF は選択されていません。'}
           </p>
         </div>
       </header>
@@ -159,6 +231,7 @@ export default function App() {
             activeThreadId={activeThreadId}
             documentName={currentDocument?.name ?? null}
             file={currentDocument?.url ?? null}
+            isInitializing={isInitializing}
             onSelectionChange={setSelectionDraft}
             onThreadActivate={setActiveThreadId}
             threads={currentThreads}
@@ -169,6 +242,7 @@ export default function App() {
             activeThreadId={activeThreadId}
             currentDocumentName={currentDocument?.name ?? null}
             isMobileSheetExpanded={isMobileSheetExpanded}
+            isInitializing={isInitializing}
             legacyThreads={legacyThreads}
             selectionDraft={selectionDraft}
             threads={currentThreads}

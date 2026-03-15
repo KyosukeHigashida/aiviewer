@@ -1,3 +1,10 @@
+export type HighlightRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
 export type AnnotationThread = {
   id: string;
   documentFingerprint?: string;
@@ -8,6 +15,11 @@ export type AnnotationThread = {
   pageNumber?: number;
   contextBefore?: string;
   contextAfter?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  anchorStartSpanIndex?: number;
+  anchorEndSpanIndex?: number;
+  highlightRects?: HighlightRect[];
 };
 
 export type SelectionDraft = {
@@ -15,4 +27,9 @@ export type SelectionDraft = {
   pageNumber: number;
   contextBefore: string;
   contextAfter: string;
+  selectionStart: number;
+  selectionEnd: number;
+  anchorStartSpanIndex: number;
+  anchorEndSpanIndex: number;
+  highlightRects: HighlightRect[];
 };

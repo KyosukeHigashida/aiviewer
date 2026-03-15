@@ -4,6 +4,7 @@ import type { AnnotationThread, SelectionDraft } from '../types/annotation';
 type ThreadPanelProps = {
   activeThreadId: string | null;
   currentDocumentName: string | null;
+  isInitializing: boolean;
   isMobileSheetExpanded: boolean;
   legacyThreads: AnnotationThread[];
   selectionDraft: SelectionDraft | null;
@@ -27,6 +28,7 @@ function formatDate(value: string) {
 export function ThreadPanel({
   activeThreadId,
   currentDocumentName,
+  isInitializing,
   isMobileSheetExpanded,
   legacyThreads,
   selectionDraft,
@@ -91,11 +93,15 @@ export function ThreadPanel({
           <div className={`selection-card${hasSelection ? '' : ' is-empty'}`}>
             {hasSelection
               ? selectionDraft?.selectedText
-              : currentDocumentName
+              : isInitializing
+                ? '保存済みの PDF と注釈を復元しています。'
+                : currentDocumentName
                 ? 'PDF 上のテキストを選択すると、ここに引用が表示されます。'
                 : '先にローカルの PDF を選択してください。'}
           </div>
-          {!currentDocumentName ? (
+          {isInitializing ? (
+            <p className="composer-hint">前回の PDF があれば自動で再表示します。</p>
+          ) : !currentDocumentName ? (
             <p className="composer-hint">右上の「PDF を選択」から対象の PDF を開いてください。</p>
           ) : !hasSelection ? (
             <p className="composer-hint">

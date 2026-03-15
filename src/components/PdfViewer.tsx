@@ -3,7 +3,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import workerSrc from 'react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mjs?url';
-import type { AnnotationThread, SelectionDraft } from '../types/annotation';
+import type { AnnotationThread, HighlightRect, SelectionDraft } from '../types/annotation';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -11,6 +11,7 @@ type PdfViewerProps = {
   activeThreadId: string | null;
   documentName: string | null;
   file: string | null;
+  isInitializing: boolean;
   onSelectionChange: (selection: SelectionDraft | null) => void;
   onThreadActivate: (threadId: string) => void;
   threads: AnnotationThread[];
@@ -18,26 +19,6 @@ type PdfViewerProps = {
 
 function normalizeSelectionText(text: string) {
   return text.replace(/\s+/g, ' ').trim();
-}
-
-function buildContext(fullText: string, selectedText: string) {
-  const normalizedFullText = normalizeSelectionText(fullText);
-  const normalizedSelectedText = normalizeSelectionText(selectedText);
-  const matchIndex = normalizedFullText.indexOf(normalizedSelectedText);
-
-  if (matchIndex === -1) {
-    return {
-      contextBefore: '',
-      contextAfter: '',
-    };
-  }
-
-  return {
-    contextBefore: normalizedFullText.slice(Math.max(0, matchIndex - 48), matchIndex).trim(),
-    contextAfter: normalizedFullText
-      .slice(matchIndex + normalizedSelectedText.length, matchIndex + normalizedSelectedText.length + 48)
-      .trim(),
-  };
 }
 
 function hasAnchor(thread: AnnotationThread) {
@@ -52,11 +33,14 @@ type SpanSegment = {
   text: string;
 };
 
-type HighlightRect = {
-  height: number;
-  left: number;
-  top: number;
-  width: number;
+type MatchRange = {
+  end: number;
+  start: number;
+};
+
+type SelectionAnchor = MatchRange & {
+  anchorEndSpanIndex: number;
+  anchorStartSpanIndex: number;
 };
 
 function buildSpanSegments(container: HTMLElement) {
@@ -95,47 +79,15 @@ function buildSpanSegments(container: HTMLElement) {
   };
 }
 
-function getCandidateScore(pageText: string, matchStart: number, matchEnd: number, thread: AnnotationThread) {
-  const before = pageText.slice(Math.max(0, matchStart - 96), matchStart);
-  const after = pageText.slice(matchEnd, Math.min(pageText.length, matchEnd + 96));
-  let score = 0;
-
-  if (thread.contextBefore) {
-    if (before.endsWith(thread.contextBefore)) {
-      score += thread.contextBefore.length + 100;
-    } else if (before.includes(thread.contextBefore)) {
-      score += thread.contextBefore.length;
-    }
-  }
-
-  if (thread.contextAfter) {
-    if (after.startsWith(thread.contextAfter)) {
-      score += thread.contextAfter.length + 100;
-    } else if (after.includes(thread.contextAfter)) {
-      score += thread.contextAfter.length;
-    }
-  }
-
-  return score;
-}
-
-function highlightThreadInPage(container: HTMLElement, thread: AnnotationThread): HighlightRect[] | null {
-  if (typeof thread.pageNumber !== 'number') {
-    return null;
-  }
-
-  const selectedText = normalizeSelectionText(thread.selectedText);
-
-  if (!selectedText) {
-    return null;
-  }
-
-  const { pageText, segments } = buildSpanSegments(container);
-
-  if (!pageText || segments.length === 0) {
-    return null;
-  }
-
+function findBestMatchRange(
+  pageText: string,
+  selectedText: string,
+  options?: {
+    approximateStart?: number;
+    contextAfter?: string;
+    contextBefore?: string;
+  },
+) {
   let searchStart = 0;
   let bestMatch: { end: number; score: number; start: number } | null = null;
 
@@ -147,7 +99,29 @@ function highlightThreadInPage(container: HTMLElement, thread: AnnotationThread)
     }
 
     const matchEnd = matchStart + selectedText.length;
-    const score = getCandidateScore(pageText, matchStart, matchEnd, thread);
+    let score = 0;
+
+    if (options?.contextBefore) {
+      const before = pageText.slice(Math.max(0, matchStart - 96), matchStart);
+      if (before.endsWith(options.contextBefore)) {
+        score += options.contextBefore.length + 100;
+      } else if (before.includes(options.contextBefore)) {
+        score += options.contextBefore.length;
+      }
+    }
+
+    if (options?.contextAfter) {
+      const after = pageText.slice(matchEnd, Math.min(pageText.length, matchEnd + 96));
+      if (after.startsWith(options.contextAfter)) {
+        score += options.contextAfter.length + 100;
+      } else if (after.includes(options.contextAfter)) {
+        score += options.contextAfter.length;
+      }
+    }
+
+    if (typeof options?.approximateStart === 'number') {
+      score += Math.max(0, 160 - Math.abs(matchStart - options.approximateStart));
+    }
 
     if (!bestMatch || score > bestMatch.score) {
       bestMatch = {
@@ -160,26 +134,177 @@ function highlightThreadInPage(container: HTMLElement, thread: AnnotationThread)
     searchStart = matchStart + 1;
   }
 
-  if (!bestMatch) {
+  return bestMatch;
+}
+
+function buildContextFromRange(pageText: string, range: MatchRange | null) {
+  if (!range) {
+    return {
+      contextBefore: '',
+      contextAfter: '',
+    };
+  }
+
+  return {
+    contextBefore: pageText.slice(Math.max(0, range.start - 48), range.start).trim(),
+    contextAfter: pageText.slice(range.end, range.end + 48).trim(),
+  };
+}
+
+function getSelectionAnchor(
+  selection: Selection,
+  container: HTMLElement,
+  selectedText: string,
+): SelectionAnchor | null {
+  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  const { pageText, segments } = buildSpanSegments(container);
+
+  if (!range || !pageText || segments.length === 0) {
+    return null;
+  }
+
+  const intersectingSegments = segments.flatMap((segment, index) => {
+    try {
+      return range.intersectsNode(segment.span) ? [{ index, segment }] : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const approximateStart = intersectingSegments[0]?.segment.start;
+  const normalizedSelectedText = normalizeSelectionText(selectedText);
+
+  if (!normalizedSelectedText || intersectingSegments.length === 0) {
+    return null;
+  }
+
+  const bestMatch = findBestMatchRange(pageText, normalizedSelectedText, {
+    approximateStart,
+  });
+
+  return bestMatch
+    ? {
+        start: bestMatch.start,
+        end: bestMatch.end,
+        anchorStartSpanIndex: intersectingSegments[0].index,
+        anchorEndSpanIndex: intersectingSegments[intersectingSegments.length - 1].index,
+      }
+    : null;
+}
+
+function getHighlightRange(thread: AnnotationThread, pageText: string) {
+  if (
+    typeof thread.selectionStart === 'number' &&
+    typeof thread.selectionEnd === 'number' &&
+    thread.selectionEnd > thread.selectionStart
+  ) {
+    return {
+      start: thread.selectionStart,
+      end: thread.selectionEnd,
+    } satisfies MatchRange;
+  }
+
+  const selectedText = normalizeSelectionText(thread.selectedText);
+
+  if (!selectedText) {
+    return null;
+  }
+
+  const bestMatch = findBestMatchRange(pageText, selectedText, {
+    contextBefore: thread.contextBefore,
+    contextAfter: thread.contextAfter,
+  });
+
+  return bestMatch
+    ? {
+        start: bestMatch.start,
+        end: bestMatch.end,
+      }
+    : null;
+}
+
+function getRectsFromSpanAnchor(segments: SpanSegment[], thread: AnnotationThread) {
+  if (
+    typeof thread.anchorStartSpanIndex !== 'number' ||
+    typeof thread.anchorEndSpanIndex !== 'number' ||
+    thread.anchorStartSpanIndex < 0 ||
+    thread.anchorEndSpanIndex < 0
+  ) {
+    return null;
+  }
+
+  const startIndex = Math.max(0, Math.min(thread.anchorStartSpanIndex, thread.anchorEndSpanIndex));
+  const endIndex = Math.min(
+    segments.length - 1,
+    Math.max(thread.anchorStartSpanIndex, thread.anchorEndSpanIndex),
+  );
+
+  if (!segments[startIndex] || !segments[endIndex]) {
+    return null;
+  }
+
+  return segments.slice(startIndex, endIndex + 1);
+}
+
+function getSelectionHighlightRects(range: Range, container: HTMLElement) {
+  const containerRect = container.getBoundingClientRect();
+  const rects = Array.from(range.getClientRects())
+    .filter((rect) => rect.width > 1 && rect.height > 1)
+    .map((rect) => {
+      return {
+        top: rect.top - containerRect.top,
+        left: rect.left - containerRect.left,
+        width: rect.width,
+        height: rect.height,
+      } satisfies HighlightRect;
+    });
+
+  return rects.length > 0 ? mergeHighlightRects(rects) : null;
+}
+
+function highlightThreadInPage(container: HTMLElement, thread: AnnotationThread): HighlightRect[] | null {
+  if (typeof thread.pageNumber !== 'number') {
+    return null;
+  }
+
+  if (thread.highlightRects && thread.highlightRects.length > 0) {
+    return thread.highlightRects;
+  }
+
+  const { pageText, segments } = buildSpanSegments(container);
+
+  if (!pageText || segments.length === 0) {
     return null;
   }
 
   const containerRect = container.getBoundingClientRect();
-  const highlightRects = segments
-    .map((segment) => {
-    const intersects = segment.end > bestMatch.start && segment.start < bestMatch.end;
-    if (!intersects) {
-      return null;
-    }
+  const anchoredSegments = getRectsFromSpanAnchor(segments, thread);
+  const matchedSegments =
+    anchoredSegments ??
+    (() => {
+      const highlightRange = getHighlightRange(thread, pageText);
 
+      if (!highlightRange) {
+        return null;
+      }
+
+      return segments.filter((segment) => {
+        return segment.end > highlightRange.start && segment.start < highlightRange.end;
+      });
+    })();
+
+  if (!matchedSegments || matchedSegments.length === 0) {
+    return null;
+  }
+
+  const highlightRects = matchedSegments.map((segment) => {
     return {
       top: segment.rect.top - containerRect.top,
       left: segment.rect.left - containerRect.left,
       width: segment.rect.width,
       height: segment.rect.height,
     };
-    })
-    .filter((value): value is HighlightRect => value !== null);
+  });
 
   return highlightRects.length > 0 ? highlightRects : null;
 }
@@ -208,6 +333,7 @@ export function PdfViewer({
   activeThreadId,
   documentName,
   file,
+  isInitializing,
   onSelectionChange,
   onThreadActivate,
   threads,
@@ -306,9 +432,10 @@ export function PdfViewer({
   const handleMouseUp = () => {
     window.setTimeout(() => {
       const selection = window.getSelection();
+      const selectionRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
       const text = normalizeSelectionText(selection?.toString() ?? '');
 
-      if (!selection || !text) {
+      if (!selection || !selectionRange || !text) {
         onSelectionChange(null);
         return;
       }
@@ -325,12 +452,19 @@ export function PdfViewer({
         return;
       }
 
-      const context = buildContext(pageText, text);
+      const selectionAnchor = getSelectionAnchor(selection, pageContainer, text);
+      const highlightRects = getSelectionHighlightRects(selectionRange, pageContainer) ?? [];
+      const context = buildContextFromRange(pageText, selectionAnchor);
       onSelectionChange({
         selectedText: text,
         pageNumber,
         contextBefore: context.contextBefore,
         contextAfter: context.contextAfter,
+        selectionStart: selectionAnchor?.start ?? 0,
+        selectionEnd: selectionAnchor?.end ?? 0,
+        anchorStartSpanIndex: selectionAnchor?.anchorStartSpanIndex ?? -1,
+        anchorEndSpanIndex: selectionAnchor?.anchorEndSpanIndex ?? -1,
+        highlightRects,
       });
     }, 0);
   };
@@ -345,9 +479,13 @@ export function PdfViewer({
       <div className="document-frame">
         {!file ? (
           <div className="viewer-empty-state">
-            <p className="viewer-empty-title">PDF をまだ開いていません。</p>
+            <p className="viewer-empty-title">
+              {isInitializing ? '保存済みの PDF を復元しています。' : 'PDF をまだ開いていません。'}
+            </p>
             <p className="viewer-empty-copy">
-              上の「PDF を選択」からローカルの PDF ファイルを選ぶと、ここに表示されます。
+              {isInitializing
+                ? '前回の文書が保存されていれば、このエリアに自動で表示されます。'
+                : '上の「PDF を選択」からローカルの PDF ファイルを選ぶと、ここに表示されます。'}
             </p>
           </div>
         ) : (
