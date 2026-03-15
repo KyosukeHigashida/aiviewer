@@ -1,0 +1,65 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>
+endobj
+5 0 obj
+<< /Length 308 >>
+stream
+BT
+/F1 20 Tf
+72 770 Td
+(Research PDF Viewer Sample - Page 1) Tj
+0 -32 Td
+/F1 12 Tf
+(Select this sentence on page one to create your first thread.) Tj
+0 -22 Td
+(This page is useful for checking right-panel selection and storage.) Tj
+0 -22 Td
+(You can save a comment and then return to the marker later.) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Length 325 >>
+stream
+BT
+/F1 20 Tf
+72 770 Td
+(Research PDF Viewer Sample - Page 2) Tj
+0 -32 Td
+/F1 12 Tf
+(Use page two to verify scrolling and thread rediscovery behavior.) Tj
+0 -22 Td
+(Create another thread here and confirm the page badge becomes P.2.) Tj
+0 -22 Td
+(Clicking a marker should highlight the matching thread in the side panel.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000373 00000 n 
+0000000732 00000 n 
+0000001108 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+1178
+%%EOF
