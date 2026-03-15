@@ -9,7 +9,8 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 type PdfViewerProps = {
   activeThreadId: string | null;
-  file: string;
+  documentName: string | null;
+  file: string | null;
   onSelectionChange: (selection: SelectionDraft | null) => void;
   onThreadActivate: (threadId: string) => void;
   threads: AnnotationThread[];
@@ -205,6 +206,7 @@ function mergeHighlightRects(rects: HighlightRect[]) {
 
 export function PdfViewer({
   activeThreadId,
+  documentName,
   file,
   onSelectionChange,
   onThreadActivate,
@@ -236,6 +238,11 @@ export function PdfViewer({
       return accumulator;
     }, {});
   }, [threads]);
+
+  useEffect(() => {
+    setHighlightRectsByPage({});
+    onSelectionChange(null);
+  }, [file, onSelectionChange]);
 
   useEffect(() => {
     if (highlightFrameRef.current !== null) {
@@ -331,11 +338,19 @@ export function PdfViewer({
   return (
     <div className="pdf-viewer" onMouseUp={handleMouseUp}>
       <div className="viewer-toolbar">
-        <span className="viewer-label">固定サンプル PDF</span>
+        <span className="viewer-label">{documentName ?? 'PDF 未選択'}</span>
         {pageCount > 0 ? <span className="viewer-meta">{pageCount} ページ</span> : null}
       </div>
 
       <div className="document-frame">
+        {!file ? (
+          <div className="viewer-empty-state">
+            <p className="viewer-empty-title">PDF をまだ開いていません。</p>
+            <p className="viewer-empty-copy">
+              上の「PDF を選択」からローカルの PDF ファイルを選ぶと、ここに表示されます。
+            </p>
+          </div>
+        ) : (
         <Document
           file={file}
           loading={<p className="viewer-status">PDF を読み込んでいます。</p>}
@@ -412,6 +427,7 @@ export function PdfViewer({
             </div>
           )}
         </Document>
+        )}
       </div>
     </div>
   );

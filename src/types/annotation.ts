@@ -1,5 +1,6 @@
 export type AnnotationThread = {
   id: string;
+  documentFingerprint?: string;
   selectedText: string;
   quotePreview: string;
   comment: string;
