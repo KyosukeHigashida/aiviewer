@@ -113,6 +113,20 @@ textarea {
   justify-content: center;
 }
 
+.page-highlight-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.page-highlight-rect {
+  position: absolute;
+  border-radius: 4px;
+  background: rgba(255, 208, 102, 0.4);
+  box-shadow: 0 0 0 2px rgba(255, 208, 102, 0.24);
+}
+
 .page-marker-rail {
   position: absolute;
   top: 0;
@@ -153,6 +167,11 @@ textarea {
 
 .react-pdf__Page {
   box-shadow: 0 12px 24px rgba(34, 28, 17, 0.18);
+}
+
+.react-pdf__Page.is-active-page {
+  outline: 2px solid rgba(199, 66, 26, 0.24);
+  outline-offset: 6px;
 }
 
 .viewer-status {
