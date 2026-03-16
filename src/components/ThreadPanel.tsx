@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AnnotationThread, SelectionDraft } from '../types/annotation';
 
 type ThreadPanelProps = {
+  activeThread: AnnotationThread | null;
   activeThreadId: string | null;
   currentDocumentName: string | null;
   isInitializing: boolean;
   isMobileSheetExpanded: boolean;
   legacyThreads: AnnotationThread[];
+  onAppendMessage: (threadId: string, content: string) => void;
   selectionDraft: SelectionDraft | null;
   threads: AnnotationThread[];
   onActivateThread: (threadId: string) => void;
@@ -26,11 +28,13 @@ function formatDate(value: string) {
 }
 
 export function ThreadPanel({
+  activeThread,
   activeThreadId,
   currentDocumentName,
   isInitializing,
   isMobileSheetExpanded,
   legacyThreads,
+  onAppendMessage,
   selectionDraft,
   threads,
   onActivateThread,
@@ -38,12 +42,17 @@ export function ThreadPanel({
   onClearSelection,
   onToggleMobileSheet,
 }: ThreadPanelProps) {
-  const [comment, setComment] = useState('');
+  const [newThreadComment, setNewThreadComment] = useState('');
+  const [replyComment, setReplyComment] = useState('');
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
-    setComment('');
+    setNewThreadComment('');
   }, [selectionDraft]);
+
+  useEffect(() => {
+    setReplyComment('');
+  }, [activeThreadId]);
 
   useEffect(() => {
     if (!activeThreadId) {
@@ -57,84 +66,166 @@ export function ThreadPanel({
   }, [activeThreadId]);
 
   const hasSelection = selectionDraft?.selectedText.trim().length ? true : false;
-  const canSave = Boolean(currentDocumentName) && hasSelection && comment.trim().length > 0;
+  const isReplyMode = !hasSelection && Boolean(activeThread);
+  const canCreate = Boolean(currentDocumentName) && hasSelection && newThreadComment.trim().length > 0;
+  const canReply = Boolean(activeThread) && replyComment.trim().length > 0;
+  const latestMessage = activeThread?.messages[activeThread.messages.length - 1] ?? null;
 
-  const handleSave = () => {
-    if (!canSave) {
+  const handleReply = () => {
+    if (!activeThread || !canReply) {
       return;
     }
 
-    onCreateThread(comment);
-    setComment('');
+    onAppendMessage(activeThread.id, replyComment);
+    setReplyComment('');
   };
+
+  const handleCreate = () => {
+    if (!canCreate) {
+      return;
+    }
+
+    onCreateThread(newThreadComment);
+    setNewThreadComment('');
+  };
+
+  const threadCards = useMemo(() => {
+    return threads.map((thread) => {
+      const latestThreadMessage = thread.messages[thread.messages.length - 1];
+      const preview = latestThreadMessage?.content ?? thread.comment ?? '';
+      const previewSingleLine = preview.replace(/\s+/g, ' ').trim();
+      const previewText =
+        previewSingleLine.length > 92 ? `${previewSingleLine.slice(0, 92)}...` : previewSingleLine;
+
+      return {
+        ...thread,
+        latestPreview: previewText,
+        latestCreatedAt: latestThreadMessage?.createdAt ?? thread.createdAt,
+        messageCount: thread.messages.length,
+      };
+    });
+  }, [threads]);
 
   return (
     <div className="thread-panel">
-      <div className="thread-panel-top">
-        <button
-          aria-expanded={isMobileSheetExpanded}
-          className="thread-sheet-handle"
-          onClick={onToggleMobileSheet}
-          type="button"
-        >
-          <span className="thread-sheet-grip" />
-          <span className="thread-sheet-title">スレッド</span>
-          <span className="thread-sheet-state">{isMobileSheetExpanded ? '一覧を閉じる' : '一覧を開く'}</span>
-        </button>
+      <button
+        aria-expanded={isMobileSheetExpanded}
+        className="thread-sheet-handle"
+        onClick={onToggleMobileSheet}
+        type="button"
+      >
+        <span className="thread-sheet-grip" />
+        <span className="thread-sheet-title">メモ</span>
+        <span className="thread-sheet-state">{threads.length} 件</span>
+      </button>
+
+      <div className="thread-panel-scroll">
+        {activeThread ? (
+          <div className="panel-section composer-section reply-composer-section">
+            <div className="panel-section-header">
+              <h2>返信中</h2>
+              <span className="thread-count">{activeThread.messages.length} 件</span>
+            </div>
+            <div className="reply-target-card">
+              <p className="reply-target-label">対象</p>
+              <p className="reply-target-quote">「{activeThread.quotePreview}」</p>
+            </div>
+            <div className="thread-history" role="log">
+              {activeThread.messages.map((message) => (
+                <article
+                  className={`thread-message${message.role === 'assistant' ? ' is-assistant' : ''}`}
+                  key={message.id}
+                >
+                  <div className="thread-message-header">
+                    <span className="thread-message-role">
+                      {message.role === 'assistant' ? 'Assistant' : 'You'}
+                    </span>
+                    <span className="thread-message-date">{formatDate(message.createdAt)}</span>
+                  </div>
+                  <p className="thread-message-content">{message.content}</p>
+                </article>
+              ))}
+            </div>
+            <textarea
+              id="reply-comment"
+              className="comment-input"
+              onChange={(event) => setReplyComment(event.target.value)}
+              placeholder="このスレッドにコメントを追加します。"
+              rows={3}
+              value={replyComment}
+            />
+            <div className="composer-actions">
+              <span className="composer-inline-hint">
+                {isReplyMode ? `最新: ${latestMessage ? formatDate(latestMessage.createdAt) : '返信なし'}` : '返信できます。'}
+              </span>
+              <button
+                className="primary-button compact-button"
+                disabled={!canReply}
+                onClick={handleReply}
+                type="button"
+              >
+                返信
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="panel-section composer-section">
           <div className="panel-section-header">
             <h2>新規スレッド</h2>
             {hasSelection ? (
-              <button className="ghost-button" onClick={onClearSelection} type="button">
+              <button className="ghost-button compact-button" onClick={onClearSelection} type="button">
                 選択解除
               </button>
             ) : null}
           </div>
-          <div className={`selection-card${hasSelection ? '' : ' is-empty'}`}>
+          <div className={`selection-card${hasSelection ? '' : ' is-empty'}${hasSelection ? ' has-selection' : ''}`}>
             {hasSelection
               ? selectionDraft?.selectedText
               : isInitializing
                 ? '保存済みの PDF と注釈を復元しています。'
                 : currentDocumentName
-                ? 'PDF 上のテキストを選択すると、ここに引用が表示されます。'
-                : '先にローカルの PDF を選択してください。'}
+                  ? 'PDF 上のテキストを選択してください。'
+                  : '先にローカルの PDF を選択してください。'}
           </div>
-          {isInitializing ? (
-            <p className="composer-hint">前回の PDF があれば自動で再表示します。</p>
-          ) : !currentDocumentName ? (
-            <p className="composer-hint">右上の「PDF を選択」から対象の PDF を開いてください。</p>
-          ) : !hasSelection ? (
-            <p className="composer-hint">
-              先に PDF 上のテキストを選択してください。コメントは先に入力できますが、保存は選択後に有効になります。
-            </p>
-          ) : null}
-          <label className="field-label" htmlFor="comment">
-            コメント
-          </label>
           <textarea
-            id="comment"
+            id="new-thread-comment"
             className="comment-input"
-            onChange={(event) => setComment(event.target.value)}
+            onChange={(event) => setNewThreadComment(event.target.value)}
             placeholder={
               !currentDocumentName
                 ? 'PDF を選択すると、ここにコメントを入力できます。'
                 : hasSelection
                   ? '選択箇所に対するメモや論点を書きます。'
-                  : 'コメントは先に入力できます。保存する前に PDF 上のテキストを選択してください。'
+                  : 'PDF 上のテキストを選ぶと、新規スレッドを作成できます。'
             }
-            rows={5}
-            value={comment}
+            rows={4}
+            value={newThreadComment}
           />
-          <button className="primary-button" disabled={!canSave} onClick={handleSave} type="button">
-            スレッドを保存
-          </button>
+          <div className="composer-actions">
+            {hasSelection ? null : (
+              <span className="composer-inline-hint">
+                {!currentDocumentName
+                  ? 'PDF を選択してください。'
+                  : activeThread
+                    ? '返信中でも新規スレッドを作れます。'
+                    : 'スレッドをタップすると返信できます。'}
+              </span>
+            )}
+            <button
+              className="primary-button compact-button"
+              disabled={!canCreate}
+              onClick={handleCreate}
+              type="button"
+            >
+              保存
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="thread-panel-scroll">
         <div className="panel-section list-section">
           <div className="panel-section-header">
-            <h2>保存済みスレッド</h2>
+            <h2>保存済み</h2>
             <span className="thread-count">{threads.length} 件</span>
           </div>
           {threads.length === 0 ? (
@@ -143,7 +234,7 @@ export function ThreadPanel({
             </p>
           ) : (
             <ul className="thread-list">
-              {threads.map((thread) => (
+              {threadCards.map((thread) => (
                 <li className="thread-item" key={thread.id}>
                   <button
                     className={`thread-card-button${thread.id === activeThreadId ? ' is-active' : ''}`}
@@ -156,14 +247,17 @@ export function ThreadPanel({
                   >
                     <div className="thread-item-header">
                       <p className="thread-quote">「{thread.quotePreview}」</p>
-                      {typeof thread.pageNumber === 'number' ? (
-                        <span className="thread-badge">P.{thread.pageNumber}</span>
-                      ) : (
-                        <span className="thread-badge is-muted">旧データ</span>
-                      )}
+                      <div className="thread-card-badges">
+                        <span className="thread-badge">{thread.messageCount} 件</span>
+                        {typeof thread.pageNumber === 'number' ? (
+                          <span className="thread-badge">P.{thread.pageNumber}</span>
+                        ) : (
+                          <span className="thread-badge is-muted">旧データ</span>
+                        )}
+                      </div>
                     </div>
-                    <p className="thread-comment">{thread.comment}</p>
-                    <p className="thread-meta">{formatDate(thread.createdAt)}</p>
+                    <p className="thread-comment">{thread.latestPreview || 'コメントはまだありません。'}</p>
+                    <p className="thread-meta">{formatDate(thread.latestCreatedAt)}</p>
                   </button>
                 </li>
               ))}
@@ -188,8 +282,12 @@ export function ThreadPanel({
                       <p className="thread-quote">「{thread.quotePreview}」</p>
                       <span className="thread-badge is-muted">旧データ</span>
                     </div>
-                    <p className="thread-comment">{thread.comment}</p>
-                    <p className="thread-meta">{formatDate(thread.createdAt)}</p>
+                    <p className="thread-comment">
+                      {thread.messages[thread.messages.length - 1]?.content ?? thread.comment}
+                    </p>
+                    <p className="thread-meta">
+                      {formatDate(thread.messages[thread.messages.length - 1]?.createdAt ?? thread.createdAt)}
+                    </p>
                   </button>
                 </li>
               ))}

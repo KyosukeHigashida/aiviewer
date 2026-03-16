@@ -1,7 +1,7 @@
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { PdfViewer } from './components/PdfViewer';
 import { ThreadPanel } from './components/ThreadPanel';
-import type { AnnotationThread, SelectionDraft } from './types/annotation';
+import type { AnnotationMessage, AnnotationThread, SelectionDraft } from './types/annotation';
 import { loadPersistedState, saveCurrentDocument, saveThread } from './lib/storage';
 
 function createThreadId() {
@@ -15,6 +15,15 @@ function createThreadId() {
 function buildQuotePreview(text: string) {
   const singleLine = text.replace(/\s+/g, ' ').trim();
   return singleLine.length > 96 ? `${singleLine.slice(0, 96)}...` : singleLine;
+}
+
+function createMessage(content: string): AnnotationMessage {
+  return {
+    id: createThreadId(),
+    role: 'user',
+    content,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 async function createDocumentFingerprint(file: File) {
@@ -94,26 +103,29 @@ export default function App() {
     ? threads.filter((thread) => thread.documentFingerprint === currentDocument.fingerprint)
     : [];
   const legacyThreads = threads.filter((thread) => !thread.documentFingerprint);
+  const activeThread = currentThreads.find((thread) => thread.id === activeThreadId) ?? null;
 
-  const handleCreateThread = (comment: string) => {
+  const handleCreateThread = (content: string) => {
     if (!selectionDraft || !currentDocument) {
       return;
     }
 
     const normalizedText = selectionDraft.selectedText.replace(/\s+/g, ' ').trim();
-    const normalizedComment = comment.trim();
+    const normalizedContent = content.trim();
 
-    if (!normalizedText || !normalizedComment) {
+    if (!normalizedText || !normalizedContent) {
       return;
     }
+
+    const firstMessage = createMessage(normalizedContent);
 
     const nextThread: AnnotationThread = {
       id: createThreadId(),
       documentFingerprint: currentDocument.fingerprint,
       selectedText: normalizedText,
       quotePreview: buildQuotePreview(normalizedText),
-      comment: normalizedComment,
-      createdAt: new Date().toISOString(),
+      createdAt: firstMessage.createdAt,
+      messages: [firstMessage],
       pageNumber: selectionDraft.pageNumber,
       contextBefore: selectionDraft.contextBefore,
       contextAfter: selectionDraft.contextAfter,
@@ -131,6 +143,45 @@ export default function App() {
     void saveThread(nextThread).catch(() => {
       setPersistenceMessage('スレッドの保存に失敗しました。');
     });
+  };
+
+  const handleAppendMessage = (threadId: string, content: string) => {
+    const normalizedContent = content.trim();
+
+    if (!normalizedContent) {
+      return;
+    }
+
+    const nextMessage = createMessage(normalizedContent);
+    let updatedThread: AnnotationThread | null = null;
+
+    setThreads((current) => {
+      const nextThreads = current.map((thread) => {
+        if (thread.id !== threadId) {
+          return thread;
+        }
+
+        updatedThread = {
+          ...thread,
+          messages: [...thread.messages, nextMessage],
+        };
+        return updatedThread;
+      });
+
+      return [...nextThreads].sort((left, right) => {
+        const leftTimestamp = new Date(left.messages[left.messages.length - 1]?.createdAt ?? left.createdAt).getTime();
+        const rightTimestamp = new Date(right.messages[right.messages.length - 1]?.createdAt ?? right.createdAt).getTime();
+        return rightTimestamp - leftTimestamp;
+      });
+    });
+
+    setPersistenceMessage(null);
+
+    if (updatedThread) {
+      void saveThread(updatedThread).catch(() => {
+        setPersistenceMessage('スレッドの保存に失敗しました。');
+      });
+    }
   };
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -196,13 +247,6 @@ export default function App() {
   return (
     <div className={`app-shell${isMobileSheetExpanded ? ' is-mobile-sheet-expanded' : ''}`}>
       <header className="app-header">
-        <div className="app-header-copy">
-          <p className="eyebrow">研究・技術文書の読解用 PDF ビューア</p>
-          <h1>ローカル PDF 読込対応</h1>
-          <p className="app-subtitle">
-            ローカル PDF を選択して開き、その文書ごとに注釈スレッドを保存します。
-          </p>
-        </div>
         <div className="app-header-actions">
           <input
             accept="application/pdf"
@@ -214,7 +258,7 @@ export default function App() {
           <button className="primary-button" onClick={handleOpenFilePicker} type="button">
             {isPickingFile ? 'PDF を準備中...' : 'PDF を選択'}
           </button>
-          <p className="document-status">
+          <p className={`document-status${currentDocument ? '' : ' is-muted'}`}>
             {isInitializing
               ? '保存済みの PDF を復元しています。'
               : persistenceMessage
@@ -244,9 +288,11 @@ export default function App() {
             isMobileSheetExpanded={isMobileSheetExpanded}
             isInitializing={isInitializing}
             legacyThreads={legacyThreads}
+            activeThread={activeThread}
             selectionDraft={selectionDraft}
             threads={currentThreads}
             onActivateThread={setActiveThreadId}
+            onAppendMessage={handleAppendMessage}
             onCreateThread={handleCreateThread}
             onClearSelection={() => setSelectionDraft(null)}
             onToggleMobileSheet={() => setIsMobileSheetExpanded((current) => !current)}

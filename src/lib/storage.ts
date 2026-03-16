@@ -1,4 +1,4 @@
-import type { AnnotationThread } from '../types/annotation';
+import type { AnnotationMessage, AnnotationThread } from '../types/annotation';
 
 const DB_NAME = 'viewer.persistence';
 const DB_VERSION = 1;
@@ -83,8 +83,42 @@ function openDatabase() {
 
 function sortThreads(threads: AnnotationThread[]) {
   return [...threads].sort((left, right) => {
-    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    const leftLastMessage = left.messages[left.messages.length - 1];
+    const rightLastMessage = right.messages[right.messages.length - 1];
+    const leftTimestamp = new Date(leftLastMessage?.createdAt ?? left.createdAt).getTime();
+    const rightTimestamp = new Date(rightLastMessage?.createdAt ?? right.createdAt).getTime();
+    return rightTimestamp - leftTimestamp;
   });
+}
+
+function createFallbackMessage(thread: AnnotationThread): AnnotationMessage | null {
+  const content = thread.comment?.trim();
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    id: `${thread.id}-legacy-message`,
+    role: 'user',
+    content,
+    createdAt: thread.createdAt,
+  };
+}
+
+function normalizeThread(thread: AnnotationThread): AnnotationThread {
+  const normalizedMessages =
+    Array.isArray(thread.messages) && thread.messages.length > 0
+      ? thread.messages
+      : (() => {
+          const fallbackMessage = createFallbackMessage(thread);
+          return fallbackMessage ? [fallbackMessage] : [];
+        })();
+
+  return {
+    ...thread,
+    messages: normalizedMessages,
+  };
 }
 
 function loadLegacyThreads(): AnnotationThread[] {
@@ -136,7 +170,7 @@ async function loadAllThreads(database: IDBDatabase) {
   const store = transaction.objectStore(THREADS_STORE);
   const threads = await requestToPromise(store.getAll()) as AnnotationThread[];
   await transactionToPromise(transaction);
-  return sortThreads(threads);
+  return sortThreads(threads.map(normalizeThread));
 }
 
 async function loadLastDocument(database: IDBDatabase) {
@@ -225,7 +259,7 @@ export async function saveThread(thread: AnnotationThread) {
 
   try {
     const transaction = database.transaction(THREADS_STORE, 'readwrite');
-    transaction.objectStore(THREADS_STORE).put(thread);
+    transaction.objectStore(THREADS_STORE).put(normalizeThread(thread));
     await transactionToPromise(transaction);
   } finally {
     database.close();
